@@ -4,17 +4,23 @@
 # Node
 node_modules/
 npm-debug.log*
-yarn.lock
-pnpm-lock.yaml
+# lockfiles are usually COMMITTED for reproducible builds:
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
 
 # Build outputs
 dist/
+coverage/
+*.log
 
-# Puppeteer/Chrome caches
+# Playwright / Puppeteer / Chrome
 .chromium/
 .cache/
+.playwright/
+.puppeteer/
 
-# VS Code
+# Editors
 .vscode/
 .history/
 
