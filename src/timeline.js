@@ -1,110 +1,233 @@
-// src/timeline.js
-export function renderTimeline(data){
-  const W = 1280, H = 800;
-  const svgNS = 'http://www.w3.org/2000/svg';
+// src/timeline.js — pro layout: path-normal labels, wrapping, anti-collision
+const W = 1280, H = 800;
+const svgNS = 'http://www.w3.org/2000/svg';
 
+const CONFIG = {
+  curve: 'M100,600 C420,380 760,440 1140,220', // gentle S
+  disk: { rOuter: 30, rInner: 22, colorOuter: '#2c5a85', colorInner: '#3f7fb5' },
+  path: { stroke: '#d7e3ee', width: 12 },
+  title: { x: 60, y: 80, size: 44, color: '#16324a', weight: 800 },
+  subtitle: { x: 60, y: 110, size: 18, color: '#6b7a90', weight: 600 },
+  wrap: { maxWidth: 260, lines: 2, lineHeight: 20 }, // adjust to taste
+  labelOffset: 46,                                     // distance from dot
+  yearDy: -40,                                         // year baseline relative to dot
+  titleDy: -16,                                        // title baseline relative to dot
+  labelPad: 8,                                        // background pad
+  showLabelBg: true,                                  // white bg under label
+};
+
+function add(el, tag, attrs = {}) {
+  const n = document.createElementNS(svgNS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  el.appendChild(n);
+  return n;
+}
+
+function textNode(g, x, y, txt, opts = {}) {
+  const t = add(g, 'text', {
+    x, y,
+    'font-size': opts.size || 16,
+    'font-weight': opts.weight || 600,
+    fill: opts.color || '#1d3146',
+    'text-anchor': opts.anchor || 'start',
+    'dominant-baseline': 'alphabetic'
+  });
+  t.textContent = txt;
+  return t;
+}
+
+function addWrappedText(g, x, y, text, anchor, maxWidth, lineHeight, maxLines, measureSvg) {
+  // simple greedy wrap by words with width check via getBBox
+  const group = add(g, 'g');
+  let words = (text || '').split(/\s+/).filter(Boolean);
+  let line = [];
+  let lines = [];
+
+  const tmp = textNode(measureSvg, x, y, '', { anchor, size: 16, weight: 800 });
+  const measure = (s) => { tmp.textContent = s || ''; return tmp.getBBox().width; };
+
+  while (words.length) {
+    line.push(words.shift());
+    if (measure(line.join(' ')) > maxWidth) {
+      const w = line.pop();           // last word overflowed
+      lines.push(line.join(' '));
+      line = [w];
+      if (lines.length === maxLines - 1) break; // room left for final line only
+    }
+  }
+  if (line.length) lines.push(line.join(' '));
+
+  // ellipsis if overflow remains
+  if (words.length) {
+    let s = lines[lines.length - 1];
+    while (measure(s + '…') > maxWidth && s.length) s = s.slice(0, -1);
+    lines[lines.length - 1] = (s || '').replace(/\s+$/, '') + '…';
+  }
+
+  // render tspans
+  lines.forEach((ln, i) => {
+    const t = add(group, 'text', {
+      x, y: y + i * lineHeight,
+      'font-size': 16,
+      'font-weight': 800,
+      fill: '#1d3146',
+      'text-anchor': anchor
+    });
+    t.textContent = ln;
+  });
+
+  tmp.remove();
+  return group;
+}
+
+function tangentAt(pathEl, s, eps = 0.5) {
+  const a = pathEl.getPointAtLength(Math.max(0, s - eps));
+  const b = pathEl.getPointAtLength(Math.min(pathEl.getTotalLength(), s + eps));
+  const tx = b.x - a.x, ty = b.y - a.y;
+  const len = Math.hypot(tx, ty) || 1;
+  return { tx: tx / len, ty: ty / len };
+}
+
+function normalFromTangent(t) {
+  // rotate tangent 90° to get normal
+  return { nx: -t.ty, ny: t.tx };
+}
+
+function rectFromTextGroup(g) {
+  const bbox = g.getBBox();
+  return { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height };
+}
+
+function inflate(r, pad) {
+  return { x: r.x - pad, y: r.y - pad, w: r.w + pad * 2, h: r.h + pad * 2 };
+}
+function intersects(a, b) {
+  return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
+}
+
+export function renderTimeline(data) {
   const root = document.getElementById('root');
-  if (!root) { console.error('No #root element'); return; }
   root.innerHTML = '';
 
-  const svg = document.createElementNS(svgNS,'svg');
-  svg.setAttribute('id','svgRoot');
-  svg.setAttribute('width', W);
-  svg.setAttribute('height', H);
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  svg.style.background = '#ffffff';
+  const svg = add(root, 'svg', { id: 'svgRoot', width: W, height: H, viewBox: `0 0 ${W} ${H}` });
 
-  // Title
-  const titleG = document.createElementNS(svgNS,'g');
-  const title = document.createElementNS(svgNS,'text');
-  title.setAttribute('x', 60); title.setAttribute('y', 80);
-  title.setAttribute('font-weight','800');
-  title.setAttribute('font-size','42');
-  title.setAttribute('fill','#1d3146');
-  title.textContent = data.title || 'Timeline';
-  titleG.appendChild(title);
+  // title + subtitle
+  const t = textNode(svg, CONFIG.title.x, CONFIG.title.y, data.title || 'Key Milestones', {
+    size: CONFIG.title.size, weight: CONFIG.title.weight, color: CONFIG.title.color, anchor: 'start'
+  });
+  textNode(svg, CONFIG.subtitle.x, CONFIG.subtitle.y, data.subtitle || '2015–2024', {
+    size: CONFIG.subtitle.size, weight: CONFIG.subtitle.weight, color: CONFIG.subtitle.color, anchor: 'start'
+  });
 
-  const sub = document.createElementNS(svgNS,'text');
-  sub.setAttribute('x', 60); sub.setAttribute('y', 110);
-  sub.setAttribute('font-weight','600');
-  sub.setAttribute('font-size','18');
-  sub.setAttribute('fill','#6b7a90');
-  sub.textContent = data.subtitle || '';
-  titleG.appendChild(sub);
-  svg.appendChild(titleG);
+  // main curve
+  const path = add(svg, 'path', {
+    id: 'curve',
+    d: CONFIG.curve,
+    fill: 'none',
+    stroke: CONFIG.path.stroke,
+    'stroke-width': CONFIG.path.width,
+    'stroke-linecap': 'round'
+  });
 
-  // Curve
-  const path = document.createElementNS(svgNS,'path');
-  path.setAttribute('id','curve');
-  path.setAttribute('d','M120,620 C380,340 720,420 1140,200');
-  path.setAttribute('fill','none');
-  path.setAttribute('stroke','#c6d3df');
-  path.setAttribute('stroke-width','10');
-  path.setAttribute('stroke-linecap','round');
-  svg.appendChild(path);
-
-  // Nodes + labels
   const items = data.items || [];
   const N = items.length;
   const total = path.getTotalLength();
   const inset = total * 0.03;
-  const step = (total - inset*2) / Math.max(1, (N-1));
+  const step = (total - inset * 2) / Math.max(1, N - 1);
+
+  // keep label rectangles to avoid collisions
+  const placed = [];
 
   items.forEach((item, i) => {
-    const p = path.getPointAtLength(inset + i*step);
-    const g = document.createElementNS(svgNS,'g');
+    const s = inset + i * step;
+    const p = path.getPointAtLength(s);
+    const tan = tangentAt(path, s);
+    const nrm = normalFromTangent(tan);
 
-    const outer = document.createElementNS(svgNS,'circle');
-    outer.setAttribute('cx', p.x); outer.setAttribute('cy', p.y);
-    outer.setAttribute('r', 30); outer.setAttribute('fill', '#2c5a85');
-    g.appendChild(outer);
+    // dot
+    const gDot = add(svg, 'g');
+    add(gDot, 'circle', { cx: p.x, cy: p.y, r: CONFIG.disk.rOuter, fill: CONFIG.disk.colorOuter });
+    add(gDot, 'circle', { cx: p.x, cy: p.y, r: CONFIG.disk.rInner, fill: CONFIG.disk.colorInner });
+    const num = add(gDot, 'text', {
+      x: p.x, y: p.y + 6, 'text-anchor': 'middle',
+      'font-size': 18, 'font-weight': 800, fill: '#fff'
+    });
+    num.textContent = (i + 1).toString();
 
-    const inner = document.createElementNS(svgNS,'circle');
-    inner.setAttribute('cx', p.x); inner.setAttribute('cy', p.y);
-    inner.setAttribute('r', 22); inner.setAttribute('fill', '#3f7fb5');
-    g.appendChild(inner);
+    // side selection (push labels to the "upper" side for readability)
+    // Using normal's y: negative => above, positive => below; flip if you prefer alternating
+    const side = nrm.ny < 0 ? 1 : -1; // 1 = along +normal, -1 = opposite
+    const labX = p.x + nrm.nx * CONFIG.labelOffset * side;
+    const labY = p.y + nrm.ny * CONFIG.labelOffset * side;
 
-    const num = document.createElementNS(svgNS,'text');
-    num.setAttribute('x', p.x); num.setAttribute('y', p.y+6);
-    num.setAttribute('text-anchor','middle');
-    num.setAttribute('font-size','18');
-    num.setAttribute('font-weight','800');
-    num.setAttribute('fill','#fff');
-    num.textContent = (i+1).toString();
-    g.appendChild(num);
+    // anchor: if label is to the right of the dot, start; else end
+    const anchor = (labX >= p.x) ? 'start' : 'end';
 
-    const right = i % 2 === 0;
-    const dx = right ? 36 : -36;
-    const anchor = right ? 'start' : 'end';
+    // YEAR
+    const year = textNode(svg, labX, labY + CONFIG.yearDy, item.year || '', {
+      anchor, size: 28, weight: 900, color: '#234b6d'
+    });
 
-    const year = document.createElementNS(svgNS,'text');
-    year.setAttribute('x', p.x + dx);
-    year.setAttribute('y', p.y - 38);
-    year.setAttribute('text-anchor', anchor);
-    year.setAttribute('font-size','26');
-    year.setAttribute('font-weight','800');
-    year.setAttribute('fill','#2c5a85');
-    year.textContent = item.year || '';
-    g.appendChild(year);
+    // TITLE (wrapped)
+    const labelGroup = addWrappedText(
+      svg,
+      labX,
+      labY + CONFIG.titleDy,
+      item.title || '',
+      anchor,
+      CONFIG.wrap.maxWidth,
+      CONFIG.wrap.lineHeight,
+      CONFIG.wrap.lines,
+      svg
+    );
 
-    const ttl = document.createElementNS(svgNS,'text');
-    ttl.setAttribute('x', p.x + dx);
-    ttl.setAttribute('y', p.y - 14);
-    ttl.setAttribute('text-anchor', anchor);
-    ttl.setAttribute('font-size','16');
-    ttl.setAttribute('font-weight','800');
-    ttl.setAttribute('fill','#1d3146');
-    ttl.textContent = item.title || '';
-    g.appendChild(ttl);
+    // optional white bg behind year+title for clarity
+    if (CONFIG.showLabelBg) {
+      const yrRect = year.getBBox();
+      const ttlRect = labelGroup.getBBox();
+      // union rect
+      const x1 = Math.min(yrRect.x, ttlRect.x), y1 = Math.min(yrRect.y, ttlRect.y);
+      const x2 = Math.max(yrRect.x + yrRect.width, ttlRect.x + ttlRect.width);
+      const y2 = Math.max(yrRect.y + yrRect.height, ttlRect.y + ttlRect.height);
+      const r = inflate({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 }, CONFIG.labelPad);
+      const bg = add(svg, 'rect', {
+        x: r.x, y: r.y, width: r.w, height: r.h, rx: 6, ry: 6,
+        fill: '#fff', opacity: 0.92
+      });
+      // ensure bg is behind: move it before year/label in DOM
+      bg.parentNode.insertBefore(bg, year);
+    }
 
-    svg.appendChild(g);
+    // simple anti-collision: if current label intersects any previous, nudge further along normal
+    let rect = rectFromTextGroup(labelGroup);
+    let yr = year.getBBox();
+    let union = { x: Math.min(rect.x, yr.x), y: Math.min(rect.y, yr.y),
+                  w: Math.max(rect.x+rect.w, yr.x+yr.width) - Math.min(rect.x, yr.x),
+                  h: Math.max(rect.y+rect.h, yr.y+yr.height) - Math.min(rect.y, yr.y) };
+    let bumped = 0;
+    while (placed.some(pr => intersects(pr, union)) && bumped < 12) {
+      const bump = 14; // px per step
+      const dx = nrm.nx * bump * side;
+      const dy = nrm.ny * bump * side;
+      // move year + label
+      year.setAttribute('x', +year.getAttribute('x') + dx);
+      year.setAttribute('y', +year.getAttribute('y') + dy);
+      [...labelGroup.querySelectorAll('text')].forEach(t => {
+        t.setAttribute('x', +t.getAttribute('x') + dx);
+        t.setAttribute('y', +t.getAttribute('y') + dy);
+      });
+      rect = labelGroup.getBBox();
+      yr = year.getBBox();
+      union = { x: Math.min(rect.x, yr.x), y: Math.min(rect.y, yr.y),
+                w: Math.max(rect.x+rect.w, yr.x+yr.width) - Math.min(rect.x, yr.x),
+                h: Math.max(rect.y+rect.h, yr.y+yr.height) - Math.min(rect.y, yr.y) };
+      bumped++;
+    }
+    placed.push(inflate(union, 6));
   });
-
-  root.appendChild(svg);
 }
 
-// 👇 critical: expose it globally so Puppeteer can call it
+// expose to puppeteer
 window.renderTimeline = renderTimeline;
-
-// Optional: auto-render if TIMELINE was set before this script loaded
+// auto render if data preloaded
 if (window.TIMELINE) window.renderTimeline(window.TIMELINE);
