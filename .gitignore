@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# Build outputs
+out/
+dist/
+
+# Puppeteer/Chrome caches
+.chromium/
+.cache/
+
+# VS Code
+.vscode/
+.history/
+
+# Local scratch
+tmp/
