@@ -1,4 +1,4 @@
-// generator.js
+// generator.js — serves locally, injects data + brand logo, exports PNG+SVG
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ---------- tiny static server (no extra deps)
+// ---------- tiny static server (no deps)
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -18,7 +18,7 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg'
+  '.jpeg': 'image/jpeg',
 };
 
 function startServer(rootDir) {
@@ -30,29 +30,32 @@ function startServer(rootDir) {
         filePath = path.join(rootDir, 'timeline.html');
       }
       fs.readFile(filePath, (err, buf) => {
-        if (err) {
-          res.statusCode = 404;
-          res.end('Not found');
-          return;
-        }
-        const ext = path.extname(filePath).toLowerCase();
-        res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
+        if (err) { res.statusCode = 404; res.end('Not found'); return; }
+        res.setHeader('Content-Type', MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
         res.end(buf);
       });
     });
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      resolve({ server, port });
-    });
+    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
   });
 }
 
-// ---------- ensure out/
+// ---------- paths & data
 const OUT = path.join(__dirname, 'out');
 if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
-// ---------- load data
 const data = JSON.parse(fs.readFileSync(path.join(__dirname, 'data.json'), 'utf8'));
+
+// brand logo -> data URL (so we don’t worry about CORS)
+const brandLogoPath = '/Users/venky/Documents/Development/DDT_EXIM_logo.jpeg';
+let logoDataURL = '';
+try {
+  const buf = fs.readFileSync(brandLogoPath);
+  const b64 = buf.toString('base64');
+  logoDataURL = `data:image/jpeg;base64,${b64}`;
+  console.log('✔ Loaded brand logo from:', brandLogoPath);
+} catch (e) {
+  console.warn('⚠ Could not read brand logo at', brandLogoPath, '- continuing without it');
+}
 
 // ---------- main
 const { server, port } = await startServer(__dirname);
@@ -60,45 +63,46 @@ const origin = `http://127.0.0.1:${port}`;
 
 const browser = await puppeteer.launch({
   headless: 'new',
-  defaultViewport: { width: 1280, height: 840, deviceScaleFactor: 2 }
+  defaultViewport: { width: 1280, height: 840, deviceScaleFactor: 2 },
 });
 const page = await browser.newPage();
 page.on('console', (msg) => console.log('PAGE:', msg.text()));
 
-// open via HTTP to avoid CORS on modules
 await page.goto(`${origin}/timeline.html`, { waitUntil: 'networkidle0' });
 
-// inject data and render (wait for window.renderTimeline)
-await page.exposeFunction('getData', () => data);
+// inject data + logo and render
+await page.exposeFunction('getPayload', () => ({ data, logoDataURL }));
 await page.evaluate(async () => {
-  const d = await window.getData();
+  const { data, logoDataURL } = await window.getPayload();
+
+  // brand logo
+  const img = document.getElementById('brandLogo');
+  if (img && logoDataURL) img.src = logoDataURL;
+
+  // timeline render
   let tries = 60;
-  while (!window.renderTimeline && tries-- > 0) {
-    await new Promise((r) => setTimeout(r, 50));
-  }
+  while (!window.renderTimeline && tries-- > 0) await new Promise(r => setTimeout(r, 50));
   if (!window.renderTimeline) throw new Error('renderTimeline not available');
-  window.renderTimeline(d);
+  window.renderTimeline(data);
 });
 
-// sanity check inside the DOM
+// sanity
 const sanity = await page.evaluate(() => ({
   hasSVG: !!document.querySelector('#svgRoot'),
   circles: document.querySelectorAll('#svgRoot circle').length,
-  texts: document.querySelectorAll('#svgRoot text').length
+  texts: document.querySelectorAll('#svgRoot text').length,
 }));
 console.log('SANITY:', sanity);
 
-// export PNG
+// export PNG + SVG
 const svgEl = await page.$('#svgRoot');
 if (svgEl) {
   await svgEl.screenshot({ path: path.join(OUT, 'timeline.png') });
 } else {
   await page.screenshot({ path: path.join(OUT, 'timeline.png') });
 }
-
-// export SVG (vector)
 const svg = await page.evaluate(() => document.querySelector('#svgRoot')?.outerHTML || '');
-if (svg) fs.writeFileSync(path.join(OUT, 'timeline.svg'), svg, 'utf-8');
+if (svg) fs.writeFileSync(path.join(OUT, 'timeline.svg'), svg, 'utf8');
 
 await browser.close();
 server.close();
