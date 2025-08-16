@@ -26,3 +26,11 @@ coverage/
 
 # Local scratch
 tmp/
+
+# PlantUML / diagrams exports
+# *.svg
+# *.png
+# *.gif
+
+# Local test HTML
+# sankey-demo*.html
