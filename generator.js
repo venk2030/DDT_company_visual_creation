@@ -1,3 +1,4 @@
+// generator.js — robust + with sanity logs
 import fs from 'fs';
 import path from 'path';
 import puppeteer from 'puppeteer';
@@ -13,14 +14,17 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 
+// Pipe browser console logs to your terminal so you can "see" what's happening
+page.on('console', msg => console.log('PAGE:', msg.text()));
+
 await page.goto('file://' + path.resolve('timeline.html'), { waitUntil: 'load' });
 
-// Inject data and ensure renderer exists
+// Give the page the data + render it
 await page.exposeFunction('getData', () => data);
 await page.evaluate(async () => {
   const d = await window.getData();
-  // if the module hasn't attached yet, wait a tick
-  let tries = 30;
+  // Wait until the module attaches the function
+  let tries = 40;
   while (!window.renderTimeline && tries-- > 0) {
     await new Promise(r => setTimeout(r, 50));
   }
@@ -28,15 +32,15 @@ await page.evaluate(async () => {
   window.renderTimeline(d);
 });
 
-// Basic sanity: count nodes
-const counts = await page.evaluate(() => ({
-  svg: !!document.querySelector('#svgRoot'),
-  nodes: document.querySelectorAll('#svgRoot circle').length,
-  labels: document.querySelectorAll('#svgRoot text').length
+// Sanity check in the page: do we have an SVG + circles + text?
+const sanity = await page.evaluate(() => ({
+  hasSVG: !!document.querySelector('#svgRoot'),
+  circles: document.querySelectorAll('#svgRoot circle').length,
+  texts: document.querySelectorAll('#svgRoot text').length
 }));
-console.log('DOM sanity:', counts);
+console.log('SANITY:', sanity);
 
-// Screenshot
+// Export PNG (target the svg if present)
 const el = await page.$('#svgRoot');
 if (el) {
   await el.screenshot({ path: path.join(OUT,'timeline.png') });
@@ -44,7 +48,7 @@ if (el) {
   await page.screenshot({ path: path.join(OUT,'timeline.png') });
 }
 
-// SVG dump
+// Export SVG (vector)
 const svg = await page.evaluate(() => document.querySelector('#svgRoot')?.outerHTML || '');
 if (svg) fs.writeFileSync(path.join(OUT,'timeline.svg'), svg, 'utf8');
 

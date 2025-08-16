@@ -1,9 +1,10 @@
-// src/timeline.js — draws curve + nodes + labels and attaches to window
+// src/timeline.js
 export function renderTimeline(data){
   const W = 1280, H = 800;
   const svgNS = 'http://www.w3.org/2000/svg';
 
   const root = document.getElementById('root');
+  if (!root) { console.error('No #root element'); return; }
   root.innerHTML = '';
 
   const svg = document.createElementNS(svgNS,'svg');
@@ -32,7 +33,7 @@ export function renderTimeline(data){
   titleG.appendChild(sub);
   svg.appendChild(titleG);
 
-  // Path
+  // Curve
   const path = document.createElementNS(svgNS,'path');
   path.setAttribute('id','curve');
   path.setAttribute('d','M120,620 C380,340 720,420 1140,200');
@@ -42,7 +43,7 @@ export function renderTimeline(data){
   path.setAttribute('stroke-linecap','round');
   svg.appendChild(path);
 
-  // Nodes/labels
+  // Nodes + labels
   const items = data.items || [];
   const N = items.length;
   const total = path.getTotalLength();
@@ -102,9 +103,8 @@ export function renderTimeline(data){
   root.appendChild(svg);
 }
 
-// 🔑 Attach the renderer for Puppeteer to call
-// (ES modules don’t export to window by default)
+// 👇 critical: expose it globally so Puppeteer can call it
 window.renderTimeline = renderTimeline;
 
-// Optional: auto-render if TIMELINE was set before load
+// Optional: auto-render if TIMELINE was set before this script loaded
 if (window.TIMELINE) window.renderTimeline(window.TIMELINE);
