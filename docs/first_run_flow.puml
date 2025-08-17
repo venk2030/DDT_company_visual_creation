@@ -1,0 +1,127 @@
+@startuml
+skinparam shadowing false
+skinparam roundcorner 12
+skinparam ActivityFontSize 14
+skinparam ArrowThickness 1.4
+title First-Run Flow • Baby-Dev 🚀
+
+start
+
+:0) Machine + Access sanity;
+partition "Access" {
+  :Check Node & npm\n(node -v / npm -v);
+  if (Node LTS?) then (yes)
+    :ssh -T github.com\nssh -T github-work;
+    if (SSH ok?) then (yes)
+      :git rev-parse --is-inside-work-tree\n(or clone repo);
+    else (no)
+      :Fix SSH keys\n(see ONBOARDING.md §0);
+      stop
+    endif
+  else (no)
+    :nvm use --lts\nor nvm install --lts;
+    stop
+  endif
+}
+
+:1) Repo structure check;
+partition "Structure" {
+  :which tree || brew install tree;
+  :tree -L 2;
+  if (Looks sane?\n data.json, src/, out/) then (yes)
+    :git ls-files | egrep\n'^(node_modules|dist|.cache)';
+    if (Any junk tracked?) then (yes)
+      :Fix .gitignore\n& git rm --cached ...;
+    else (no)
+      :Proceed;
+    endif
+  else (no)
+    :Ask lead; stop
+  endif
+}
+
+:2) Install deps;
+partition "Install" {
+  :npm install (or npm ci);
+  if (Install success?) then (yes)
+    :Proceed;
+  else (no)
+    :rm -rf node_modules package-lock.json;
+    :npm cache clean --force;
+    :nvm use --lts; npm install;
+    if (Still fails?) then (yes)
+      :xcode-select --install (mac);
+      stop
+    else (no)
+      :Proceed;
+    endif
+  endif
+}
+
+:3) Build;
+partition "Build" {
+  :npm run build (or make build);
+  if (Build OK?) then (yes)
+    :ls -lah out/ | egrep 'timeline.(png|svg)';
+  else (no)
+    :Go Debug (step 4/5);
+  endif
+}
+
+:4) Debug mode;
+partition "Debug" {
+  :VS Code Run & Debug\n(.vscode/launch.json);
+  :node --inspect-brk generator.js;
+}
+
+:5) Build fail triage;
+partition "Triage" {
+  if (Chromium/Puppeteer issue?) then (yes)
+    :Use system Chrome\nPUPPETEER_EXECUTABLE_PATH=... npm run build;
+  else (no)
+    if (Cache/perm issue?) then (yes)
+      :clear caches & reinstall;
+    else (no)
+      :Paste error+cmd in PR;
+    endif
+  endif
+}
+
+:6) Data input JSON;
+partition "Data" {
+  :Edit data.json\n(minor change);
+  :Rebuild -> verify output changed;
+}
+
+:7) Toggle template;
+partition "Templates" {
+  :TEMPLATE=curved npm run build;
+  :TEMPLATE=zigzag npm run build;
+}
+
+:8) Git commands;
+partition "Git" {
+  :git checkout -b feat/<name>-first-run;
+  :git add .; git commit -m "...";
+  :git push -u origin HEAD;
+}
+
+:9) Ready to level up;
+:Read ONBOARDING.md & PROJECT_OBJECTIVE.md;
+
+:10) Appendix ABC;
+note right
+A: quick git diffs\nB: verify .gitignore\nC: remote hygiene
+end note
+
+:11) Dev job assignments;
+partition "Roles" {
+  :Docs Captain • update guides\nper PR;
+  :Template Wrangler • add src/* variants;
+  :Data Modeler • schema+validation;
+  :Build/Tooling • Makefile/CI;
+  :QA Visual Diff • golden images;
+}
+
+stop
+@enduml

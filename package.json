@@ -1,13 +1,17 @@
 {
-  "name": "project1-digital-india-timeline",
+  "name": "company-timeline-visual",
   "version": "1.0.0",
-  "description": "Generate Digital India timeline SVG + PNG from JSON using HTML, SVG, Puppeteer",
+  "description": "Generate company timeline SVG + PNG from JSON using HTML, SVG, Puppeteer",
   "type": "module",
   "scripts": {
+    "lint:data": "node generator.js --validate-only",
     "build": "node generator.js",
     "dev": "node generator.js"
   },
   "dependencies": {
     "puppeteer": "^23.6.0"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1"
   }
 }
