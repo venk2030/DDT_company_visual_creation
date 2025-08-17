@@ -5,7 +5,7 @@ import http from 'http';
 import puppeteer from 'puppeteer';
 import { fileURLToPath } from 'url';
 import Ajv from 'ajv';
-import { timelineSchema } from './schema.js';
+import { Schema } from './schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
