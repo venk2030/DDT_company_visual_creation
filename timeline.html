@@ -16,12 +16,10 @@
   </style>
 </head>
 <body>
-  <div id="stage">
-    <img id="brandLogo" alt="Brand Logo"/>
-    <div id="root"></div>
+  <img id="brandLogo" style="max-height:40px;" />
+  <div id="chart">
+    <svg id="svgRoot" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
-
-  <!-- curved rendering -->
-  <script type="module" src="./src/curved.js"></script>
+  <script type="module" src="./src/timeline.js"></script>
 </body>
 </html>

@@ -1,14 +1,27 @@
-// generator.js — serves locally, injects data + brand logo, exports PNG+SVG
+// generator.js — serves locally, injects data + brand logo, exports PNG+SVG (with template switch, schema validation & --validate-only)
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import puppeteer from 'puppeteer';
 import { fileURLToPath } from 'url';
+import Ajv from 'ajv';
+import { timelineSchema } from './schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ---------- tiny static server (no deps)
+// ===== args & env =====
+const ARGS = new Set(process.argv.slice(2));
+const VALIDATE_ONLY = ARGS.has('--validate-only');
+
+const TEMPLATE = (process.env.TEMPLATE || 'timeline').trim(); // timeline | curved | zigzag
+const HEADLESS = (process.env.HEADLESS ?? 'new');             // 'new' | 'true' | 'false'
+const EXECUTABLE = process.env.PUPPETEER_EXECUTABLE_PATH || null;
+const LOGO_PATH = process.env.LOGO_PATH || '/Users/venky/Documents/Development/DDT_EXIM_logo.jpeg';
+const OUT_BASENAME = (process.env.OUT_BASENAME || 'timeline').trim();
+const VIEWPORT = { width: 1280, height: 840, deviceScaleFactor: 2 };
+
+// ===== tiny static server w/ template remap =====
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -21,16 +34,25 @@ const MIME = {
   '.jpeg': 'image/jpeg',
 };
 
-function startServer(rootDir) {
+function startServer(rootDir, templateName) {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const urlPath = new URL(req.url, 'http://localhost').pathname;
-      let filePath = path.join(rootDir, decodeURIComponent(urlPath));
-      if (urlPath === '/' || urlPath === '') {
-        filePath = path.join(rootDir, 'timeline.html');
+
+      // remap: /src/timeline.js -> /src/<TEMPLATE>.js (front-end imports timeline.js)
+      let effectivePath = urlPath;
+      if (urlPath === '/' || urlPath === '') effectivePath = '/timeline.html';
+      if (urlPath === '/src/timeline.js' && templateName !== 'timeline') {
+        effectivePath = `/src/${templateName}.js`;
       }
+
+      const filePath = path.join(rootDir, decodeURIComponent(effectivePath));
       fs.readFile(filePath, (err, buf) => {
-        if (err) { res.statusCode = 404; res.end('Not found'); return; }
+        if (err) {
+          res.statusCode = 404;
+          res.end(`Not found: ${effectivePath}`);
+          return;
+        }
         res.setHeader('Content-Type', MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
         res.end(buf);
       });
@@ -39,75 +61,140 @@ function startServer(rootDir) {
   });
 }
 
-// ---------- paths & data
+// ===== paths & out dir =====
 const OUT = path.join(__dirname, 'out');
 if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
-const data = JSON.parse(fs.readFileSync(path.join(__dirname, 'data.json'), 'utf8'));
+// data load (once)
+const dataPath = path.join(__dirname, 'data.json');
+let dataRaw;
+try {
+  dataRaw = fs.readFileSync(dataPath, 'utf8');
+} catch (e) {
+  console.error(`❌ Could not read data.json: ${e.message}`);
+  process.exit(1);
+}
+let data;
+try {
+  data = JSON.parse(dataRaw);
+} catch (e) {
+  console.error(`❌ data.json is not valid JSON: ${e.message}`);
+  process.exit(1);
+}
 
-// brand logo -> data URL (so we don’t worry about CORS)
-const brandLogoPath = '/Users/venky/Documents/Development/DDT_EXIM_logo.jpeg';
+// schema validate (once)
+const ajv = new Ajv({ allErrors: true });
+const validate = ajv.compile(schema);
+if (!validate(data)) {
+  console.error('❌ data.json failed schema validation:\n', validate.errors);
+  process.exit(1);
+}
+console.log('✔ data.json schema validation passed');
+
+// normalize {items: [...]}
+if (!Array.isArray(data?.items)) {
+  console.warn('⚠ data.json missing "items" array after validation? Proceeding with empty items.');
+  data = { items: [] };
+}
+
+if (VALIDATE_ONLY) {
+  console.log('✅ --validate-only: schema OK. Exiting without rendering.');
+  process.exit(0);
+}
+
+// ===== brand logo -> data URL =====
 let logoDataURL = '';
 try {
-  const buf = fs.readFileSync(brandLogoPath);
+  const buf = fs.readFileSync(LOGO_PATH);
   const b64 = buf.toString('base64');
-  logoDataURL = `data:image/jpeg;base64,${b64}`;
-  console.log('✔ Loaded brand logo from:', brandLogoPath);
-} catch (e) {
-  console.warn('⚠ Could not read brand logo at', brandLogoPath, '- continuing without it');
+  const ext = path.extname(LOGO_PATH).toLowerCase() || '.jpeg';
+  const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
+  logoDataURL = `data:${mime};base64,${b64}`;
+  console.log('✔ Loaded brand logo from:', LOGO_PATH);
+} catch {
+  console.warn('⚠ Could not read brand logo at', LOGO_PATH, '- continuing without it');
 }
 
-// ---------- main
-const { server, port } = await startServer(__dirname);
+// ===== main =====
+const { server, port } = await startServer(__dirname, TEMPLATE);
 const origin = `http://127.0.0.1:${port}`;
+const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, ''); // YYYYMMDDTHHMMSS
+const stem = `${OUT_BASENAME}.${TEMPLATE}.${ts}`;
+const outPNG = path.join(OUT, `${stem}.png`);
+const outSVG = path.join(OUT, `${stem}.svg`);
+const latestPNG = path.join(OUT, `${OUT_BASENAME}.${TEMPLATE}.latest.png`);
+const latestSVG = path.join(OUT, `${OUT_BASENAME}.${TEMPLATE}.latest.svg`);
 
-const browser = await puppeteer.launch({
-  headless: 'new',
-  defaultViewport: { width: 1280, height: 840, deviceScaleFactor: 2 },
-});
-const page = await browser.newPage();
-page.on('console', (msg) => console.log('PAGE:', msg.text()));
+let browser;
+try {
+  const launchOpts = { headless: HEADLESS, defaultViewport: VIEWPORT };
+  if (EXECUTABLE) launchOpts.executablePath = EXECUTABLE;
 
-await page.goto(`${origin}/timeline.html`, { waitUntil: 'networkidle0' });
+  browser = await puppeteer.launch(launchOpts);
+  const page = await browser.newPage();
+  page.on('console', (msg) => console.log('PAGE:', msg.text()));
+  page.on('pageerror', (err) => console.error('PAGEERROR:', err?.message || err));
+  page.on('response', (resp) => { if (resp.status() >= 400) console.warn('HTTP', resp.status(), resp.url()); });
 
-// inject data + logo and render
-await page.exposeFunction('getPayload', () => ({ data, logoDataURL }));
-await page.evaluate(async () => {
-  const { data, logoDataURL } = await window.getPayload();
+  console.log(`→ Using template: ${TEMPLATE}`);
+  await page.goto(`${origin}/timeline.html`, { waitUntil: 'networkidle0', timeout: 60_000 });
 
-  // brand logo
-  const img = document.getElementById('brandLogo');
-  if (img && logoDataURL) img.src = logoDataURL;
+  // inject data + logo and render
+  await page.exposeFunction('getPayload', () => ({ data, logoDataURL }));
 
-  // timeline render
-  let tries = 60;
-  while (!window.renderTimeline && tries-- > 0) await new Promise(r => setTimeout(r, 50));
-  if (!window.renderTimeline) throw new Error('renderTimeline not available');
-  window.renderTimeline(data);
-});
+  const renderOk = await page.evaluate(async () => {
+    const { data, logoDataURL } = await window.getPayload();
 
-// sanity
-const sanity = await page.evaluate(() => ({
-  hasSVG: !!document.querySelector('#svgRoot'),
-  circles: document.querySelectorAll('#svgRoot circle').length,
-  texts: document.querySelectorAll('#svgRoot text').length,
-}));
-console.log('SANITY:', sanity);
+    // brand logo
+    const img = document.getElementById('brandLogo');
+    if (img && logoDataURL) img.src = logoDataURL;
 
-// export PNG + SVG
-const svgEl = await page.$('#svgRoot');
-if (svgEl) {
-  await svgEl.screenshot({ path: path.join(OUT, 'timeline.png') });
-} else {
-  await page.screenshot({ path: path.join(OUT, 'timeline.png') });
+    // wait for renderer
+    let tries = 120;
+    while (!window.renderTimeline && tries-- > 0) await new Promise((r) => setTimeout(r, 50));
+    if (!window.renderTimeline) return { ok: false, reason: 'renderTimeline not available (did src/<template>.js load?)' };
+
+    try { window.renderTimeline(data); return { ok: true }; }
+    catch (e) { return { ok: false, reason: e?.message || String(e) }; }
+  });
+
+  if (!renderOk.ok) throw new Error(`Render failed: ${renderOk.reason}`);
+
+  // wait for SVG root (or fall back)
+  await page.waitForFunction(() => !!document.querySelector('#svgRoot') || !!document.querySelector('svg'), { timeout: 15_000 });
+  const svgEl = await page.$('#svgRoot') || await page.$('svg');
+
+  // export PNG
+  if (svgEl) await svgEl.screenshot({ path: outPNG });
+  else await page.screenshot({ path: outPNG, fullPage: true });
+
+  // export SVG
+  const svg = await page.evaluate(() => (document.querySelector('#svgRoot') || document.querySelector('svg'))?.outerHTML || '');
+  if (svg) fs.writeFileSync(outSVG, svg, 'utf8');
+
+  // "latest" symlinks (best-effort)
+  try {
+    for (const p of [latestPNG, latestSVG]) if (fs.existsSync(p)) fs.unlinkSync(p);
+    if (fs.existsSync(outPNG)) fs.symlinkSync(path.basename(outPNG), latestPNG);
+    if (fs.existsSync(outSVG)) fs.symlinkSync(path.basename(outSVG), latestSVG);
+  } catch {}
+
+  console.log('✅ Exported:', [
+    fs.existsSync(outPNG) && path.relative(__dirname, outPNG),
+    fs.existsSync(outSVG) && path.relative(__dirname, outSVG),
+  ].filter(Boolean).join(' , '));
+} catch (err) {
+  console.error('❌ Build failed:', err?.message || err);
+  try {
+    const triage = path.join(OUT, `${OUT_BASENAME}.${TEMPLATE}.fail.png`);
+    if (browser && (await browser.pages()).length) {
+      const [p] = await browser.pages();
+      await p.screenshot({ path: triage, fullPage: true });
+      console.error('🖼  Wrote failure screenshot:', path.relative(__dirname, triage));
+    }
+  } catch {}
+  process.exitCode = 1;
+} finally {
+  try { if (browser) await browser.close(); } catch {}
+  server.close();
 }
-const svg = await page.evaluate(() => document.querySelector('#svgRoot')?.outerHTML || '');
-if (svg) fs.writeFileSync(path.join(OUT, 'timeline.svg'), svg, 'utf8');
-
-await browser.close();
-server.close();
-
-console.log('✅ Exported:', [
-  fs.existsSync(path.join(OUT, 'timeline.png')) && 'out/timeline.png',
-  fs.existsSync(path.join(OUT, 'timeline.svg')) && 'out/timeline.svg'
-].filter(Boolean).join(' , '));
