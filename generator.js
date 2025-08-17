@@ -1,27 +1,26 @@
-// generator.js — serves locally, injects data + brand logo, exports PNG+SVG (with template switch, schema validation & --validate-only)
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import puppeteer from 'puppeteer';
 import { fileURLToPath } from 'url';
 import Ajv from 'ajv';
-import { Schema } from './schema.js';
+import schema from './schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ===== args & env =====
+// ----- args & env
 const ARGS = new Set(process.argv.slice(2));
 const VALIDATE_ONLY = ARGS.has('--validate-only');
 
-const TEMPLATE = (process.env.TEMPLATE || 'timeline').trim(); // timeline | curved | zigzag
+const TEMPLATE = (process.env.TEMPLATE || 'timeline').trim(); // timeline | curved | zigzag (maps to src/<TEMPLATE>.js)
 const HEADLESS = (process.env.HEADLESS ?? 'new');             // 'new' | 'true' | 'false'
 const EXECUTABLE = process.env.PUPPETEER_EXECUTABLE_PATH || null;
 const LOGO_PATH = process.env.LOGO_PATH || '/Users/venky/Documents/Development/DDT_EXIM_logo.jpeg';
 const OUT_BASENAME = (process.env.OUT_BASENAME || 'timeline').trim();
 const VIEWPORT = { width: 1280, height: 840, deviceScaleFactor: 2 };
 
-// ===== tiny static server w/ template remap =====
+// ----- tiny static server with template remap
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -39,7 +38,7 @@ function startServer(rootDir, templateName) {
     const server = http.createServer((req, res) => {
       const urlPath = new URL(req.url, 'http://localhost').pathname;
 
-      // remap: /src/timeline.js -> /src/<TEMPLATE>.js (front-end imports timeline.js)
+      // remap: /src/timeline.js -> /src/<TEMPLATE>.js (front-end imports /src/timeline.js)
       let effectivePath = urlPath;
       if (urlPath === '/' || urlPath === '') effectivePath = '/timeline.html';
       if (urlPath === '/src/timeline.js' && templateName !== 'timeline') {
@@ -48,11 +47,7 @@ function startServer(rootDir, templateName) {
 
       const filePath = path.join(rootDir, decodeURIComponent(effectivePath));
       fs.readFile(filePath, (err, buf) => {
-        if (err) {
-          res.statusCode = 404;
-          res.end(`Not found: ${effectivePath}`);
-          return;
-        }
+        if (err) { res.statusCode = 404; res.end(`Not found: ${effectivePath}`); return; }
         res.setHeader('Content-Type', MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
         res.end(buf);
       });
@@ -61,28 +56,28 @@ function startServer(rootDir, templateName) {
   });
 }
 
-// ===== paths & out dir =====
+// ----- ensure out dir
 const OUT = path.join(__dirname, 'out');
 if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
-// data load (once)
+// ----- data load + schema validation
 const dataPath = path.join(__dirname, 'data.json');
-let dataRaw;
+let raw;
 try {
-  dataRaw = fs.readFileSync(dataPath, 'utf8');
+  raw = fs.readFileSync(dataPath, 'utf8');
 } catch (e) {
   console.error(`❌ Could not read data.json: ${e.message}`);
   process.exit(1);
 }
+
 let data;
 try {
-  data = JSON.parse(dataRaw);
+  data = JSON.parse(raw);
 } catch (e) {
   console.error(`❌ data.json is not valid JSON: ${e.message}`);
   process.exit(1);
 }
 
-// schema validate (once)
 const ajv = new Ajv({ allErrors: true });
 const validate = ajv.compile(schema);
 if (!validate(data)) {
@@ -91,18 +86,23 @@ if (!validate(data)) {
 }
 console.log('✔ data.json schema validation passed');
 
-// normalize {items: [...]}
-if (!Array.isArray(data?.items)) {
-  console.warn('⚠ data.json missing "items" array after validation? Proceeding with empty items.');
-  data = { items: [] };
-}
-
 if (VALIDATE_ONLY) {
   console.log('✅ --validate-only: schema OK. Exiting without rendering.');
   process.exit(0);
 }
 
-// ===== brand logo -> data URL =====
+// allow {items: [...]} or {events: [...]}, normalize to items
+if (!Array.isArray(data?.items || data?.events)) {
+  const arr = Array.isArray(data?.items) ? data.items : Array.isArray(data?.events) ? data.events : null;
+  if (!arr) {
+    console.warn('⚠ data.json should contain "items" or "events" array; continuing with empty items.');
+    data = { items: [] };
+  } else {
+    data = { items: arr };
+  }
+}
+
+// ----- brand logo -> data URL (best-effort)
 let logoDataURL = '';
 try {
   const buf = fs.readFileSync(LOGO_PATH);
@@ -115,7 +115,7 @@ try {
   console.warn('⚠ Could not read brand logo at', LOGO_PATH, '- continuing without it');
 }
 
-// ===== main =====
+// ----- main
 const { server, port } = await startServer(__dirname, TEMPLATE);
 const origin = `http://127.0.0.1:${port}`;
 const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, ''); // YYYYMMDDTHHMMSS
@@ -141,11 +141,9 @@ try {
 
   // inject data + logo and render
   await page.exposeFunction('getPayload', () => ({ data, logoDataURL }));
-
   const renderOk = await page.evaluate(async () => {
     const { data, logoDataURL } = await window.getPayload();
 
-    // brand logo
     const img = document.getElementById('brandLogo');
     if (img && logoDataURL) img.src = logoDataURL;
 
@@ -172,7 +170,7 @@ try {
   const svg = await page.evaluate(() => (document.querySelector('#svgRoot') || document.querySelector('svg'))?.outerHTML || '');
   if (svg) fs.writeFileSync(outSVG, svg, 'utf8');
 
-  // "latest" symlinks (best-effort)
+  // maintain "latest" symlinks (best-effort)
   try {
     for (const p of [latestPNG, latestSVG]) if (fs.existsSync(p)) fs.unlinkSync(p);
     if (fs.existsSync(outPNG)) fs.symlinkSync(path.basename(outPNG), latestPNG);
@@ -185,6 +183,7 @@ try {
   ].filter(Boolean).join(' , '));
 } catch (err) {
   console.error('❌ Build failed:', err?.message || err);
+  // write a failure screenshot if possible
   try {
     const triage = path.join(OUT, `${OUT_BASENAME}.${TEMPLATE}.fail.png`);
     if (browser && (await browser.pages()).length) {

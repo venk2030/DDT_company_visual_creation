@@ -1,26 +1,25 @@
-// schema.js — JSON Schema for data.json (MVP-2)
-export const timelineSchema = {
-  $id: "https://example.com/timeline.schema.json",
-  type: "object",
-  required: ["items"],
-  additionalProperties: false,
-  properties: {
-    title: { type: "string" },
-    subtitle: { type: "string" },
-    items: {
-      type: "array",
-      minItems: 1,
-      items: {
-        type: "object",
-        required: ["year", "title"],
-        additionalProperties: false,
-        properties: {
-          year: { type: "string", pattern: "^[0-9]{4}$" },
-          title: { type: "string" },
-          description: { type: "string" },
-          icon: { type: "string" }
+{
+  "$id": "https://example.com/timeline.schema.json",
+  "type": "object",
+  "required": ["items"],
+  "additionalProperties": false,
+  "properties": {
+    "title": { "type": "string" },
+    "subtitle": { "type": "string" },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["year", "title"],
+        "additionalProperties": false,
+        "properties": {
+          "year": { "type": "string", "pattern": "^[0-9]{4}$" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "icon": { "type": "string" }
         }
       }
     }
   }
-};
+}
